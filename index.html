@@ -166,9 +166,33 @@ async function startCloudApp(user){authMessage('Vérification des autorisations�
 
 function adminEscape(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function adminMsg(message,isError=false){const el=document.getElementById('adminUsersMessage');if(el){el.textContent=message;el.style.color=isError?'#b42318':'#157347';}}
-async function adminFunction(action,payload={}){if(currentRole!=='admin')throw new Error('Accès réservé à Admin.');const {data,error}=await sbClient.functions.invoke('admin-users',{body:{action,...payload}});if(error)throw error;if(data&&data.error)throw new Error(data.error);return data;}
+async function adminFunction(action,payload={}){
+ if(currentRole!=='admin')throw new Error('Accès réservé à Admin.');
+ const {data,error}=await sbClient.functions.invoke('admin-users',{body:{action,...payload}});
+ if(error){
+  let details=error.message||'Erreur inconnue';
+  let status='';
+  try{
+   const ctx=error.context;
+   if(ctx){
+    status=ctx.status?' (HTTP '+ctx.status+')':'';
+    let raw='';
+    if(typeof ctx.clone==='function')raw=await ctx.clone().text();
+    else if(typeof ctx.text==='function')raw=await ctx.text();
+    if(raw){
+     try{const body=JSON.parse(raw);details=body.message||body.error||body.msg||body.code||details;}
+     catch(_){details=raw.slice(0,500)||details;}
+    }
+   }
+  }catch(_){ }
+  console.error('ADMIN-USERS diagnostic:',{action,error,status,details});
+  throw new Error(details+status);
+ }
+ if(data&&data.error)throw new Error(data.error);
+ return data;
+}
 function adminDate(v){if(!v)return 'Jamais';const d=new Date(v);return isNaN(d)?'—':d.toLocaleString('fr-FR');}
-async function loadAdminUsers(){if(currentRole!=='admin')return;adminMsg('Chargement des comptes…');try{const data=await adminFunction('list');const users=data.users||[];const rows=users.map(u=>`<tr><td>${adminEscape(u.email||'—')}</td><td><select id="role-${u.id}"><option value="admin" ${u.role==='admin'?'selected':''}>Admin</option><option value="supervisor" ${u.role==='supervisor'?'selected':''}>Supervisor</option><option value="operator" ${u.role==='operator'?'selected':''}>Operator</option><option value="viewer" ${u.role==='viewer'?'selected':''}>Viewer</option></select></td><td>${u.disabled?'<span style="color:#b42318">Désactivé</span>':'Actif'}</td><td>${adminDate(u.last_sign_in_at)}</td><td><button class="btn" onclick="adminSetRole('${u.id}')">Enregistrer rôle</button> <button class="btn" onclick="adminToggleUser('${u.id}',${u.disabled?'false':'true'})">${u.disabled?'Réactiver':'Désactiver'}</button></td></tr>`).join('');document.getElementById('adminUsersTable').innerHTML=`<div class="tablewrap"><table><thead><tr><th>E-mail</th><th>Rôle</th><th>État</th><th>Dernière connexion</th><th>Actions</th></tr></thead><tbody>${rows||'<tr><td colspan="5">Aucun compte.</td></tr>'}</tbody></table></div>`;adminMsg(`${users.length} compte(s) chargé(s).`);}catch(e){adminMsg('Erreur : '+(e.message||String(e))+' — Vérifiez le déploiement de la fonction admin-users.',true);}}
+async function loadAdminUsers(){if(currentRole!=='admin')return;adminMsg('Chargement des comptes…');try{const data=await adminFunction('list');const users=data.users||[];const rows=users.map(u=>{const disabled=!!(u.disabled||(u.banned_until&&new Date(u.banned_until)>new Date()));return `<tr><td>${adminEscape(u.email||'—')}</td><td><select id="role-${u.id}"><option value="admin" ${u.role==='admin'?'selected':''}>Admin</option><option value="supervisor" ${u.role==='supervisor'?'selected':''}>Supervisor</option><option value="operator" ${u.role==='operator'?'selected':''}>Operator</option><option value="viewer" ${u.role==='viewer'?'selected':''}>Viewer</option></select></td><td>${disabled?'<span style="color:#b42318">Désactivé</span>':'Actif'}</td><td>${adminDate(u.last_sign_in_at)}</td><td><button class="btn" onclick="adminSetRole('${u.id}')">Enregistrer rôle</button> <button class="btn" onclick="adminToggleUser('${u.id}',${disabled?'false':'true'})">${disabled?'Réactiver':'Désactiver'}</button></td></tr>`;}).join('');document.getElementById('adminUsersTable').innerHTML=`<div class="tablewrap"><table><thead><tr><th>E-mail</th><th>Rôle</th><th>État</th><th>Dernière connexion</th><th>Actions</th></tr></thead><tbody>${rows||'<tr><td colspan="5">Aucun compte.</td></tr>'}</tbody></table></div>`;adminMsg(`${users.length} compte(s) chargé(s).`);}catch(e){adminMsg('Erreur : '+(e.message||String(e))+' — Vérifiez le déploiement de la fonction admin-users.',true);}}
 async function adminCreateUser(){const email=document.getElementById('adminNewEmail').value.trim(),password=document.getElementById('adminNewPassword').value,role=document.getElementById('adminNewRole').value;if(!email||password.length<8){adminMsg('Saisissez un e-mail et un mot de passe d’au moins 8 caractères.',true);return;}try{adminMsg('Création du compte…');await adminFunction('create',{email,password,role});document.getElementById('adminNewEmail').value='';document.getElementById('adminNewPassword').value='';adminMsg('Compte créé et rôle attribué. Transmettez les identifiants au collaborateur par un canal sécurisé.');await loadAdminUsers();}catch(e){adminMsg('Création impossible : '+(e.message||String(e)),true);}}
 async function adminSetRole(id){const role=document.getElementById('role-'+id)?.value;if(!role)return;try{await adminFunction('set_role',{user_id:id,role});adminMsg('Rôle mis à jour.');await loadAdminUsers();}catch(e){adminMsg('Modification du rôle impossible : '+(e.message||String(e)),true);}}
 async function adminToggleUser(id,disable){if(!confirm(disable?'Désactiver ce compte ?':'Réactiver ce compte ?'))return;try{await adminFunction(disable?'disable':'enable',{user_id:id});adminMsg(disable?'Compte désactivé.':'Compte réactivé.');await loadAdminUsers();}catch(e){adminMsg('Opération impossible : '+(e.message||String(e)),true);}}
